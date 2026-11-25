@@ -27,14 +27,19 @@ MAX_CHARS = 200
 
 
 def _validate_entry(text):
-    """Return True only if the text passes the kit's gate exactly."""
+    """Return True only if the text passes the kit's gate exactly.
+
+    Gate: 1-200 characters, not only whitespace, a single line, UTF-8
+    encodable, and free of control characters (a stray \\t or \\x00 would
+    break the one-line rule in spirit even if it is not a newline).
+    """
     if not isinstance(text, str):
         return False
     if not (MIN_CHARS <= len(text) <= MAX_CHARS):
         return False
     if not text.strip():
         return False
-    if "\n" in text or "\r" in text:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
         return False
     try:
         text.encode("utf-8")
@@ -43,13 +48,21 @@ def _validate_entry(text):
     return True
 
 
+def _resolve_output_dir():
+    """Return the harness output directory, or None if it is unset/blank."""
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
+    if out_dir is None or not out_dir.strip():
+        return None
+    return out_dir
+
+
 def main():
     if not _validate_entry(ENTRY):
         print("entry failed validation, refusing to write", file=sys.stderr)
         return 0
 
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
-    if not out_dir:
+    out_dir = _resolve_output_dir()
+    if out_dir is None:
         print("MAKEFUN_OUTPUT_DIR is not set", file=sys.stderr)
         return 0
 
@@ -62,13 +75,20 @@ def main():
         print("could not write output: %s" % exc, file=sys.stderr)
         return 0
 
-    # Read-back verification: what is on disk must be exactly the entry.
+    # Read-back verification: what is on disk must be exactly the entry,
+    # byte for byte — no trailing newline, no BOM, no partial write.
     try:
-        with open(path, "r", encoding="utf-8", newline="") as f:
-            written = f.read()
+        with open(path, "rb") as f:
+            raw = f.read()
     except OSError as exc:
         print("could not read back output: %s" % exc, file=sys.stderr)
         return 0
+
+    if raw != ENTRY.encode("utf-8"):
+        print("read-back verification failed: bytes differ", file=sys.stderr)
+        return 0
+
+    written = raw.decode("utf-8")
 
     if written != ENTRY or not _validate_entry(written):
         print("read-back verification failed", file=sys.stderr)
